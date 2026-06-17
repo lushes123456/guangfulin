@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>祈福锦鲤 三层水泡</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{display:flex;justify-content:center;background:#000;}
+canvas{display:block;}
+</style>
+</head>
+<body>
+<script>
+// ================= 全局参数设置 =================
+let state = 1; // 1待机 2加速 3汇聚漩涡 4等待 5展示
+
+let cx, cy;
+let leftThird, rightThird;
+
+let stateStartTime = 0;
+let textAlpha = 0;
+let currentBlessing = "";
+const blessingWords = [
+  "岁岁安康", "平安喜乐", "万事顺意", "阖家安康",
+  "福伴朝夕", "前程似锦", "步步高升", "心有所成",
+  "福运绵长", "财源顺遂", "吉庆常伴", "纳福迎祥",
+  "心静无忧", "自在安然", "岁岁清欢", "风暖福临"
+];
+
+const bgColor = [30, 130, 210];
+const fishColor = [255, 255, 255];
+const btnColor = [255, 255, 255, 100];
+const textColor = [255, 255, 255];
+
+// 点击波纹配置
+let waves = [];
+const waveColor = [255, 255, 255, 70];
+const waveLightColor = [135, 206, 250, 90];
+const waveMaxRadius = 300;
+
+// 水泡三层横条遮屏参数
+let bubbles = [];
+const bubbleColor = [255, 255, 255];
+const bubbleSpawnRate = 0.99;    // 超高生成密度，几乎每帧出水泡
+const bubbleBaseSpeed = 4;     // 慢速上浮，多层堆叠加厚
+const maxBubbleCount = 480;        // 大幅扩容最大水泡数量，铺满全屏
+// 三层横向生成带Y坐标
+let band1Y, band2Y, band3Y;
+
+let fishes = [];
+let font;
+
+// 基础速度
+const baseSpeedY = -1.2;
+const fastSpeedY = -4.5;
+const accelDuration = 1200;
+const gatherDuration = 3500;
+const MAX_FISH = 120;
+
+// 全局流畅系数
+const MOVE_SMOOTH = 0.07;
+const ANGLE_SMOOTH = 0.12;
+const BOUNCE_SOFT = 0.25;
+const TRANSITION_SMOOTH = 0.06;
+
+// 漩涡参数
+const VORTEX_SPEED = 0.025;
+const VORTEX_RADIUS_MIN = 40;
+const VORTEX_RADIUS_MAX = 180;
+
+function setup() {
+  createCanvas(540, 960);
+  cx = width / 2;
+  cy = height / 2;
+
+  leftThird = width * (1.0/3.0);
+  rightThird = width * (2.0/3.0);
+
+  // 三层横向水雾带 垂直间距140像素
+  band1Y = height + 20;    // 最底层：屏幕底边外侧
+  band2Y = height + 20 - 140;   // 中层：底部往上140px
+  band3Y = height + 20 - 280;   // 上层：底部往上280px
+
+  waves = [];
+  bubbles = [];
+  fishes = [];
+
+  // 兼容中文字体
+  font = textFont('SimSun,STSong,Microsoft YaHei,sans-serif');
+  textSize(48);
+  textAlign(CENTER, CENTER);
+  noStroke();
+
+  initFishes(25);
+}
+
+function draw() {
+  background(...bgColor);
+  drawWaves();
+  drawBubbles();
+  manageFishes();
+
+  // 三层横条同步生成水泡
+  if((state == 2 || state == 3) && bubbles.length < maxBubbleCount){
+    if(random(1) < bubbleSpawnRate){
+      // 底层横条水泡
+      bubbles.push(new Bubble(random(0, width), band1Y));
+      // 中层横条水泡
+      bubbles.push(new Bubble(random(0, width), band2Y));
+      // 上层横条水泡
+      bubbles.push(new Bubble(random(0, width), band3Y));
+    }
+  }
+
+  switch(state) {
+    case 1:
+      drawState1UI();
+      break;
+    case 2:
+      if (millis() - stateStartTime > accelDuration) {
+        changeState(3);
+      }
+      break;
+    case 3:
+      if (millis() - stateStartTime > gatherDuration) {
+        changeState(4);
+      }
+      if (frameCount % 8 == 0 && fishes.length < MAX_FISH) {
+        spawnEdgeFish();
+      }
+      break;
+    case 4:
+      drawState4UI();
+      break;
+    case 5:
+      drawState5UI();
+      break;
+  }
+}
+
+function mousePressed() {
+  waves.push(new Wave(mouseX, mouseY));
+
+  if (state == 1) {
+    const btnY = height * 0.85;
+    if (dist(mouseX, mouseY, cx, btnY) < 50) {
+      changeState(2);
+    }
+  } else if (state == 4) {
+    changeState(5);
+  } else if (state == 5) {
+    resetToState1();
+  }
+}
+
+function changeState(newState) {
+  state = newState;
+  stateStartTime = millis();
+  textAlpha = 0;
+  if (state == 5) {
+    const r = floor(random(blessingWords.length));
+    currentBlessing = blessingWords[r];
+  }
+}
+
+function resetToState1() {
+  state = 1;
+  textAlpha = 0;
+  bubbles = []; // 切回待机清空全部水泡
+  let keep = [];
+  for (let i = 0; i < min(25, fishes.length); i++) {
+    keep.push(fishes[i]);
+  }
+  fishes = keep;
+  for (const f of fishes) {
+    f.resetVortex();
+  }
+}
+
+// ================= 界面绘制 =================
+function drawState1UI() {
+  const btnY = height * 0.85;
+  const breathScale = 1.0 + 0.15 * sin(frameCount * 0.05);
+  const breathAlpha = 150 + 55 * sin(frameCount * 0.05);
+
+  noFill();
+  strokeWeight(3);
+  stroke(...btnColor, breathAlpha);
+  ellipse(cx, btnY, 60 * breathScale, 60 * breathScale);
+
+  fill(...btnColor, breathAlpha);
+  noStroke();
+  ellipse(cx, btnY, 10, 10);
+
+  fill(...textColor, 200);
+  textSize(16);
+  text("点触祈愿", cx, btnY + 60);
+}
+
+function drawState4UI() {
+  textAlpha = lerp(textAlpha, 255, 0.02);
+  const textScale = 1.0 + 0.05 * sin(frameCount * 0.03);
+  push();
+  translate(cx, cy);
+  scale(textScale);
+  fill(...textColor, textAlpha);
+  textSize(24);
+  text("移步中庭查看祈愿结果", 0, 0);
+  pop();
+}
+
+function drawState5UI() {
+  textAlpha = lerp(textAlpha, 255, 0.03);
+  fill(...textColor, textAlpha * 1);
+  textSize(42);
+  text(currentBlessing, cx, cy - 30);
+  fill(...textColor, textAlpha * 0.7);
+  textSize(16);
+  text("— 点击画面再次祈愿 —", cx, cy + 50);
+}
+
+// ================= 点击波纹 =================
+function drawWaves() {
+  for (let i = waves.length - 1; i >= 0; i--) {
+    const w = waves[i];
+    w.update();
+    w.display();
+    if (w.radius > waveMaxRadius || w.alpha <= 0) {
+      waves.splice(i, 1);
+    }
+  }
+}
+
+class Wave {
+  constructor(px, py) {
+    this.x = px;
+    this.y = py;
+    this.radius = 0;
+    this.speed = 1.8;
+    this.alpha = 80;
+    this.lightPulse = random(TWO_PI);
+  }
+
+  update() {
+    this.radius += this.speed;
+    this.alpha -= 0.8;
+    this.lightPulse += 0.04;
+  }
+
+  display() {
+    const lightValue = sin(this.lightPulse) * 0.5 + 0.5;
+    noFill();
+    stroke(...waveLightColor, this.alpha * lightValue);
+    strokeWeight(3);
+    ellipse(this.x, this.y, this.radius * 2.2, this.radius * 2.2);
+
+    stroke(...waveColor, this.alpha);
+    strokeWeight(2);
+    ellipse(this.x, this.y, this.radius * 2, this.radius * 2);
+  }
+}
+
+// ================= 三层横条水泡渲染 =================
+function drawBubbles(){
+  for(let i = bubbles.length-1; i >= 0; i--){
+    const b = bubbles[i];
+    b.update();
+    b.display();
+    // 完全飘出屏幕顶部才删除
+    if(b.y < -60){
+      bubbles.splice(i, 1);
+    }
+  }
+}
+
+class Bubble{
+  constructor(px, py){
+    this.x = px;
+    this.y = py;
+    // 大尺寸水泡，单颗遮挡面积大，减少缝隙
+    this.size = random(3, 26);
+    this.speedY = bubbleBaseSpeed * map(this.size, 12, 44, 2.0, 0.6);
+    this.swing = random(TWO_PI);
+    this.swingSpeed = random(0.02, 0.06);
+    // 高透明度，多层叠加完全遮挡底层
+    this.alpha = random(100, 200);
+  }
+
+  update(){
+    this.y -= this.speedY;
+    this.swing += this.swingSpeed;
+    // 零横向摆动，横条整齐无缝隙
+    this.x += sin(this.swing) * 0;
+
+    // 仅画面最顶端窄区域淡出，中间全程遮挡
+    if(this.y < height * 0.08){
+      const fadeRatio = map(this.y, height * 0.08, -60, 1, 0);
+      this.alpha *= fadeRatio;
+    }
+  }
+
+  display(){
+    push();
+    noStroke();
+    fill(...bubbleColor, this.alpha);
+    ellipse(this.x, this.y, this.size, this.size);
+    // 水泡高光通透质感
+    fill(255, this.alpha * 0.9);
+    ellipse(this.x - this.size*0.25, this.y - this.size*0.25, this.size*0.25, this.size*0.25);
+    pop();
+  }
+}
+
+// ================= 鱼群管理 =================
+function initFishes(num) {
+  for (let i = 0; i < num; i++) {
+    const x = random(leftThird, rightThird);
+    const y = random(height);
+    fishes.push(new Fish(x, y));
+  }
+}
+
+function spawnEdgeFish() {
+  const startX = random(width);
+  const startY = height + 50;
+  const nf = new Fish(startX, startY);
+  nf.resetVortex();
+  fishes.push(nf);
+}
+
+function manageFishes() {
+  for (let i = fishes.length - 1; i >= 0; i--) {
+    const f = fishes[i];
+    f.update();
+    f.display();
+
+    if (state == 1) {
+      if (f.x < leftThird) {
+        f.x = leftThird;
+        f.vx = abs(f.vx) * BOUNCE_SOFT;
+      } else if (f.x > rightThird) {
+        f.x = rightThird;
+        f.vx = -abs(f.vx) * BOUNCE_SOFT;
+      }
+      if (f.y < -50) {
+        f.y = height + 50;
+        f.x = random(leftThird, rightThird);
+      }
+    }
+  }
+}
+
+// ================= 鱼类漩涡 =================
+class Fish {
+  constructor(startX, startY) {
+    this.x = startX;
+    this.y = startY;
+    this.depth = random(0.3, 1.0);
+    this.vx = 0;
+    this.vy = baseSpeedY * this.depth;
+    this.tarVx = this.vx;
+    this.tarVy = this.vy;
+    this.angle = -HALF_PI;
+    this.swingOffset = random(TWO_PI);
+    this.noiseSeed = random(1000);
+
+    this.resetVortex();
+  }
+
+  resetVortex() {
+    this.orbitAngle = random(TWO_PI);
+    this.orbitRadius = map(this.depth, 0.1, 1.0, VORTEX_RADIUS_MIN, VORTEX_RADIUS_MAX);
+  }
+
+  update() {
+    if (state == 1) {
+      const nx = noise(this.x * 0.015 + this.noiseSeed, frameCount * 0.015) - 0.5;
+      this.tarVx = nx * 1.8;
+      this.tarVy = baseSpeedY * this.depth;
+
+      const centerX = (leftThird + rightThird) / 2.0;
+      const pull = (centerX - this.x) * 0.004;
+      this.tarVx += pull;
+    }
+    else if (state == 2) {
+      const nx = noise(this.x * 0.02 + this.noiseSeed, frameCount * 0.02) - 0.5;
+      this.tarVx = nx * 2.5;
+      this.tarVy = fastSpeedY * this.depth;
+    }
+    else if (state >= 3) {
+      this.orbitAngle += VORTEX_SPEED;
+      const targetX = cx + cos(this.orbitAngle) * this.orbitRadius;
+      const targetY = cy + sin(this.orbitAngle) * this.orbitRadius;
+
+      this.tarVx = (targetX - this.x) * 0.04;
+      this.tarVy = (targetY - this.y) * 0.04;
+
+      const nx = noise(this.x * 0.025 + this.noiseSeed, frameCount * 0.025) - 0.5;
+      this.tarVx += nx * 0.8;
+    }
+
+    this.vx = lerp(this.vx, this.tarVx, TRANSITION_SMOOTH);
+    this.vy = lerp(this.vy, this.tarVy, TRANSITION_SMOOTH);
+
+    this.x += this.vx;
+    this.y += this.vy;
+
+    const targetAngle = atan2(this.vy, this.vx);
+    let diff = targetAngle - this.angle;
+    while (diff > PI) diff -= TWO_PI;
+    while (diff < -PI) diff += TWO_PI;
+    this.angle += diff * ANGLE_SMOOTH;
+  }
+
+  display() {
+    const fishLen = map(this.depth, 0.1, 1.0, 14, 36);
+    const fishWid = fishLen * 0.35;
+    const alpha = map(this.depth, 0.1, 1.0, 55, 210);
+
+    const moveSpeed = sqrt(this.vx * this.vx + this.vy * this.vy);
+    const tailAmp = map(moveSpeed, 0, 5, 0.15, 0.55);
+    const tailSwing = sin(frameCount * 0.18 + this.swingOffset) * tailAmp;
+
+    push();
+    translate(this.x, this.y);
+    rotate(this.angle);
+    noStroke();
+    fill(...fishColor, alpha);
+
+    beginShape();
+    vertex(fishLen * 0.5, 0);
+    bezierVertex(fishLen * 0.2, fishWid, -fishLen * 0.2, fishWid, -fishLen * 0.5, 0);
+    bezierVertex(-fishLen * 0.2, -fishWid, fishLen * 0.2, -fishWid, fishLen * 0.5, 0);
+    endShape();
+
+    push();
+    translate(-fishLen * 0.5, 0);
+    rotate(tailSwing);
+    beginShape();
+    vertex(0, 0);
+    vertex(-fishLen * 0.4, fishWid * 0.8);
+    vertex(-fishLen * 0.2, 0);
+    vertex(-fishLen * 0.4, -fishWid * 0.8);
+    endShape(CLOSE);
+    pop();
+
+    pop();
+  }
+}
+</script>
+</body>
+</html>
